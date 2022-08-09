@@ -1104,6 +1104,317 @@ TRACY_API int64_t GetFrequencyQpc()
 #endif
 }
 
+bool IsTracyThread()
+{
+    uint32_t threadid = GetThreadHandle();
+    std::string threadname(GetTracyThreadName(threadid));
+    if (threadname.compare(0, 5, "Tracy") == 0)
+    {
+        return true;
+    }
+    return false;
+}
+
+typedef void mi_malloc_callback_fun(void* p, size_t size);
+typedef void (*PFN_register_malloc)(mi_malloc_callback_fun* p);
+
+typedef void mi_free_callback_fun(void* p);
+typedef void (*PFN_register_free)(mi_free_callback_fun* p);
+
+static size_t CALLBACK_DEPTH = 0;
+static size_t MIN_SIZE = 0;
+static size_t MAX_SIZE = 0xFFFFFFFF;
+
+void MallocCallback(void* p, size_t size)
+{
+    if(size < MIN_SIZE || size > MAX_SIZE)
+    {
+        return;
+    }
+    static thread_local bool is_tracy_thread = IsTracyThread();
+    if(is_tracy_thread)
+    {
+        return;
+    }
+    if(CALLBACK_DEPTH > 0)
+    {
+        Profiler::MemAllocCallstackOffset( p, size, CALLBACK_DEPTH, true, 4 );
+    }
+    else
+    {
+        Profiler::MemAlloc(p, size, true);
+    }
+}
+
+void FreeCallback(void* p)
+{
+    static thread_local bool is_in_callback = false;
+    if(is_in_callback)
+        return;
+    is_in_callback = true;
+
+    static thread_local bool is_tracy_thread = IsTracyThread();
+    if(is_tracy_thread)
+    {
+        is_in_callback = false;
+        return;
+    }
+    Profiler::MemFree(p, true);
+    is_in_callback = false;
+}
+
+#if defined __APPLE__
+    static void* (*system_malloc)(struct _malloc_zone_t *zone, size_t size) = NULL;
+    static void (*system_free)(struct _malloc_zone_t *zone, void *ptr) = NULL;
+
+    int32_t* GetPerThreadData(struct _malloc_zone_t *zone)
+    {
+        static std::once_flag s_once_flag;
+        static pthread_key_t s_key;
+        static bool is_init = false;
+        int32_t* ret;
+        if(is_init)
+        {
+            ret = static_cast<int32_t*>(pthread_getspecific(s_key));
+            if(ret)
+            {
+                return ret;
+            }
+        }
+        std::call_once(s_once_flag, []() {
+            int error = pthread_key_create(&s_key, NULL);
+            assert(!error);
+            is_init = true;
+        });
+        ret = static_cast<int32_t*>(system_malloc(zone, sizeof(int32_t)));
+        pthread_setspecific(s_key, static_cast<void*>(ret));
+        return ret;
+    }
+
+    inline bool get_bit(const int32_t& in, size_t pos)
+    {
+        return (in & (1 << pos)) >> pos;
+    }
+
+    inline void set_bit(int32_t* in, size_t pos)
+    {
+        *in = (*in) | (1 << pos);
+    }
+
+    inline void unset_bit(int32_t* in, size_t pos)
+    {
+        *in = (*in) & (~(1 << pos));
+    }
+    
+    static void* MallocWrapper(struct _malloc_zone_t *zone, size_t size)
+    {
+        void* ret = system_malloc(zone, size);
+        int32_t* per_thread_state = GetPerThreadData(zone);
+        if(!get_bit(*per_thread_state, 0))
+        {
+            set_bit(per_thread_state, 0);
+            MallocCallback(ret, size);
+            unset_bit(per_thread_state, 0);
+        } 
+        return ret;
+    }
+
+    static void* (*system_memalign)(struct _malloc_zone_t *zone, size_t alignment, size_t size) = NULL;
+    static void* MemAlignWrapper(struct _malloc_zone_t *zone, size_t alignment, size_t size)
+    {
+        void* ret = system_memalign(zone, alignment, size);
+        int32_t* per_thread_state = GetPerThreadData(zone);
+        if(!get_bit(*per_thread_state, 0))
+        {
+            set_bit(per_thread_state, 0);
+            MallocCallback(ret, size);
+            unset_bit(per_thread_state, 0);
+        } 
+        return ret;
+    }
+
+
+    static void* (*system_calloc)(struct _malloc_zone_t *zone, size_t num_items, size_t size) = NULL;
+    static void* CallocWrapper(struct _malloc_zone_t *zone, size_t num_items, size_t size)
+    {
+        void* ret = system_calloc(zone, num_items, size);
+        int32_t* per_thread_state = GetPerThreadData(zone);
+        if(!get_bit(*per_thread_state, 0))
+        {
+            set_bit(per_thread_state, 0);
+            MallocCallback(ret, num_items*size);
+            unset_bit(per_thread_state, 0);
+        } 
+        return ret;
+    }
+
+    static void* (*system_valloc)(struct _malloc_zone_t *zone, size_t size) = NULL;
+    static void* VallocWrapper(struct _malloc_zone_t *zone, size_t size)
+    {
+        void* ret = system_valloc(zone, size);
+        int32_t* per_thread_state = GetPerThreadData(zone);
+        if(!get_bit(*per_thread_state, 0))
+        {
+            set_bit(per_thread_state, 0);
+            MallocCallback(ret, size);
+            unset_bit(per_thread_state, 0);
+        }
+        return ret;
+    }
+
+    static void FreeWrapper(struct _malloc_zone_t *zone, void *ptr)
+    {
+        int32_t* per_thread_state = GetPerThreadData(zone);
+        if(!get_bit(*per_thread_state, 0))
+        {
+            set_bit(per_thread_state, 0);
+            FreeCallback(ptr);
+            unset_bit(per_thread_state, 0);
+        }
+        system_free(zone, ptr);
+        return;
+    }
+
+    static void (*system_free_definite_size)(struct _malloc_zone_t *zone, void *ptr, size_t size) = NULL;
+    static void FreeDefiniteSizeWrapper(struct _malloc_zone_t *zone, void *ptr, size_t size)
+    {
+        int32_t* per_thread_state = GetPerThreadData(zone);
+        if(!get_bit(*per_thread_state, 0))
+        {
+            set_bit(per_thread_state, 0);
+            FreeCallback(ptr);
+            unset_bit(per_thread_state, 0);
+        }
+        system_free_definite_size(zone, ptr, size);
+    }
+
+    static void* (*system_realloc)(struct _malloc_zone_t *zone, void *ptr, size_t size) = NULL;
+    static void* ReallocWrapper(struct _malloc_zone_t *zone, void *ptr, size_t size)
+    {
+        int32_t* per_thread_state = GetPerThreadData(zone);
+        if(ptr)
+        {
+            if(!get_bit(*per_thread_state, 0))
+            {
+                set_bit(per_thread_state, 0);
+                FreeCallback(ptr);
+                unset_bit(per_thread_state, 0);
+            }
+        }
+        void* ret = system_realloc(zone, ptr, size);
+        if(!get_bit(*per_thread_state, 0))
+        {
+            set_bit(per_thread_state, 0);
+            MallocCallback(ret, size);
+            unset_bit(per_thread_state, 0);
+        }
+        return ret;
+    }
+
+    bool HookMallocOnOSX(bool is_hook)
+    {
+        malloc_zone_t *zone = malloc_default_zone();
+        if(zone->version < 8) return false;
+
+        if(system_malloc == NULL && is_hook)
+        {
+            if(mprotect(zone, getpagesize(), PROT_READ | PROT_WRITE) != 0) return false;
+            system_malloc = zone->malloc;
+            system_calloc = zone->calloc;
+            system_valloc = zone->valloc;
+            system_memalign = zone->memalign;
+            system_free = zone->free;
+            system_realloc = zone->realloc;
+            system_free_definite_size = zone->free_definite_size;
+
+            zone->malloc = MallocWrapper;
+            zone->calloc = CallocWrapper;
+            zone->valloc = VallocWrapper;
+            zone->memalign = MemAlignWrapper;
+            zone->free = FreeWrapper;
+            zone->realloc = ReallocWrapper;
+            zone->batch_free = NULL;
+            zone->batch_malloc = NULL;
+            zone->free_definite_size = FreeDefiniteSizeWrapper;
+            if (mprotect(zone, getpagesize(), PROT_READ) != 0) return false;
+        }
+        else if(system_malloc != NULL && !is_hook)
+        {
+            if(mprotect(zone, getpagesize(), PROT_READ | PROT_WRITE) != 0) return false;
+            zone->malloc = system_malloc;
+            zone->calloc = system_calloc;
+            zone->valloc = system_valloc;
+            zone->memalign = system_memalign;
+            zone->free = system_free;
+            zone->realloc = system_realloc;
+            zone->free_definite_size = system_free_definite_size;
+
+            system_malloc = NULL;
+            system_calloc = NULL;
+            system_valloc = NULL;
+            system_memalign = NULL;
+            system_free = NULL;
+            system_realloc = NULL;
+            system_free_definite_size = NULL;
+            if (mprotect(zone, getpagesize(), PROT_READ) != 0) return false;
+        }
+        return true;
+    }
+#endif
+
+bool __SetMallocCallback(bool is_hooked)
+{
+    PFN_register_malloc mi_register_malloc_callback = NULL;
+    PFN_register_free mi_register_free_callback = NULL;
+#if defined _WIN32
+    HMODULE hMiMalloc = LoadLibraryA("mimalloc.dll");
+    if (hMiMalloc == NULL)
+        return false;
+    mi_register_malloc_callback = (PFN_register_malloc)GetProcAddress(hMiMalloc, "mi_register_malloc_callback");
+    mi_register_free_callback  = (PFN_register_free)GetProcAddress(hMiMalloc, "mi_register_free_callback");
+#elif defined __ANDROID__
+    void* libmimalloc = dlopen( "libmimalloc.so", RTLD_NOW );
+    if (libmimalloc == NULL)
+        return false;
+    mi_register_malloc_callback = (PFN_register_malloc)dlsym( libmimalloc, "mi_register_malloc_callback" );
+    mi_register_free_callback   = (PFN_register_free)dlsym( libmimalloc, "mi_register_free_callback" );
+#elif defined __APPLE__
+    return HookMallocOnOSX(is_hooked);
+#endif /* _WIN32 */
+    if (mi_register_malloc_callback != NULL && mi_register_free_callback != NULL)
+    {
+        if(is_hooked)
+        {
+            mi_register_malloc_callback(MallocCallback);
+            mi_register_free_callback(FreeCallback);
+        }
+        else
+        {
+            mi_register_malloc_callback(NULL);
+            mi_register_free_callback(NULL);
+        }
+        return true;
+    }
+    return false;
+}
+
+bool SetMallocCallback(size_t callback_depth, size_t min_size, size_t max_size)
+{
+    CALLBACK_DEPTH = callback_depth;
+    MIN_SIZE = min_size;
+    MAX_SIZE = max_size;
+    return __SetMallocCallback(true);
+}
+
+bool UnsetMallocCallback()
+{
+    CALLBACK_DEPTH = 0;
+    MIN_SIZE = 0;
+    MAX_SIZE = 0xFFFFFFFF;
+    return __SetMallocCallback(false);
+}
+
+
 #ifdef TRACY_DELAYED_INIT
 struct ThreadNameData;
 TRACY_API moodycamel::ConcurrentQueue<QueueItem>& GetQueue();

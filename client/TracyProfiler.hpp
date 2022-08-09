@@ -67,6 +67,8 @@ TRACY_API uint32_t GetThreadHandle();
 TRACY_API bool ProfilerAvailable();
 TRACY_API bool ProfilerAllocatorAvailable();
 TRACY_API int64_t GetFrequencyQpc();
+TRACY_API bool SetMallocCallback(size_t callback_depth, size_t min_size, size_t max_size);
+TRACY_API bool UnsetMallocCallback();
 
 #if defined TRACY_TIMER_FALLBACK && defined TRACY_HW_TIMER && ( defined __i386 || defined _M_IX86 || defined __x86_64__ || defined _M_X64 )
 TRACY_API bool HardwareSupportsInvariantTSC();  // check, if we need fallback scenario
