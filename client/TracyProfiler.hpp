@@ -94,6 +94,17 @@ struct SourceLocationData
     const char* file;
     uint32_t line;
     uint32_t color;
+
+    constexpr SourceLocationData(const char* _name, const char* _function, const char* _file, const uint32_t _line, const uint32_t _color)
+        : name(_name)
+        , function(_function)
+        , line(_line)
+        , color(_color)
+    {
+        file = std::string_view(_file).find("Runtime") ? _file + std::string_view(_file).find("Runtime") + 8 : _file;
+    }
+
+    SourceLocationData() = default;
 };
 
 #ifdef TRACY_ON_DEMAND
