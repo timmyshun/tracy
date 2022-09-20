@@ -12,6 +12,7 @@
 #include "TracyCallstack.hpp"
 #include "TracySysTime.hpp"
 #include "TracyFastVector.hpp"
+#include "TracyConcurrentVector.hpp"
 #include "../common/TracyQueue.hpp"
 #include "../common/TracyAlign.hpp"
 #include "../common/TracyAlloc.hpp"
@@ -95,16 +96,16 @@ struct SourceLocationData
     uint32_t line;
     uint32_t color;
 
-    constexpr SourceLocationData(const char* _name, const char* _function, const char* _file, const uint32_t _line, const uint32_t _color)
-        : name(_name)
-        , function(_function)
-        , line(_line)
-        , color(_color)
-    {
-        file = std::string_view(_file).find("Runtime") ? _file + std::string_view(_file).find("Runtime") + 8 : _file;
-    }
+    //constexpr SourceLocationData(const char* _name, const char* _function, const char* _file, const uint32_t _line, const uint32_t _color)
+    //    : name(_name)
+    //    , function(_function)
+    //    , line(_line)
+    //    , color(_color)
+    //{
+    //    file = std::string_view(_file).find("Runtime") ? _file + std::string_view(_file).find("Runtime") + 8 : _file;
+    //}
 
-    SourceLocationData() = default;
+    //SourceLocationData() = default;
 };
 
 #ifdef TRACY_ON_DEMAND
@@ -244,14 +245,12 @@ public:
     static tracy_force_inline QueueItem* QueueSerial()
     {
         auto& p = GetProfiler();
-        p.m_serialLock.lock();
         return p.m_serialQueue.prepare_next();
     }
 
     static tracy_force_inline QueueItem* QueueSerialCallstack( void* ptr )
     {
         auto& p = GetProfiler();
-        p.m_serialLock.lock();
         p.SendCallstackSerial( ptr );
         return p.m_serialQueue.prepare_next();
     }
@@ -260,7 +259,6 @@ public:
     {
         auto& p = GetProfiler();
         p.m_serialQueue.commit_next();
-        p.m_serialLock.unlock();
     }
 
     static tracy_force_inline void SendFrameMark( const char* name )
@@ -470,9 +468,7 @@ public:
 #endif
         const auto thread = GetThreadHandle();
 
-        GetProfiler().m_serialLock.lock();
         SendMemAlloc( QueueType::MemAlloc, thread, ptr, size );
-        GetProfiler().m_serialLock.unlock();
     }
 
     static tracy_force_inline void MemFree( const void* ptr, bool secure )
@@ -483,9 +479,7 @@ public:
 #endif
         const auto thread = GetThreadHandle();
 
-        GetProfiler().m_serialLock.lock();
         SendMemFree( QueueType::MemFree, thread, ptr );
-        GetProfiler().m_serialLock.unlock();
     }
 
     static tracy_force_inline void MemAllocCallstack( const void* ptr, size_t size, int depth, bool secure )
@@ -500,10 +494,7 @@ public:
 
         auto callstack = Callstack( depth );
 
-        profiler.m_serialLock.lock();
-        SendCallstackSerial( callstack );
-        SendMemAlloc( QueueType::MemAllocCallstack, thread, ptr, size );
-        profiler.m_serialLock.unlock();
+        SendMemAllocCallstack( callstack, QueueType::MemAllocCallstack, thread, ptr, size );
 #else
         static_cast<void>(depth); // unused
         MemAlloc( ptr, size, secure );
@@ -864,6 +855,33 @@ private:
         GetProfiler().m_serialQueue.commit_next();
     }
 
+    static tracy_force_inline void SendMemAllocCallstack( void* callstack, QueueType type, const uint32_t thread, const void* ptr, size_t size )
+    {
+        assert( type == QueueType::MemAlloc || type == QueueType::MemAllocCallstack || type == QueueType::MemAllocNamed || type == QueueType::MemAllocCallstackNamed );
+
+        auto item0 = GetProfiler().m_serialQueue.prepare_next(2);
+        MemWrite( &item0->hdr.type, QueueType::CallstackSerial );
+        MemWrite( &item0->callstackFat.ptr, (uint64_t)ptr );
+
+        auto item1 = item0 + 1;
+        MemWrite( &item1->hdr.type, type );
+        MemWrite( &item1->memAlloc.time, GetTime() );
+        MemWrite( &item1->memAlloc.thread, thread );
+        MemWrite( &item1->memAlloc.ptr, (uint64_t)ptr );
+        if( compile_time_condition<sizeof( size ) == 4>::value )
+        {
+            memcpy( &item1->memAlloc.size, &size, 4 );
+            memset( &item1->memAlloc.size + 4, 0, 2 );
+        }
+        else
+        {
+            assert( sizeof( size ) == 8 );
+            memcpy( &item1->memAlloc.size, &size, 4 );
+            memcpy( ((char*)&item1->memAlloc.size)+4, ((char*)&size)+4, 2 );
+        }
+        GetProfiler().m_serialQueue.commit_next(2);
+    }
+
     static tracy_force_inline void SendMemName( const char* name )
     {
         assert( name );
@@ -906,7 +924,7 @@ private:
 
     char* m_lz4Buf;
 
-    FastVector<QueueItem> m_serialQueue, m_serialDequeue;
+    ConcurrentVector<QueueItem> m_serialQueue, m_serialDequeue;
     TracyMutex m_serialLock;
 
 #ifndef TRACY_NO_FRAME_IMAGE

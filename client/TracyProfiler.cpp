@@ -1138,7 +1138,7 @@ void MallocCallback(void* p, size_t size)
     }
     if(CALLBACK_DEPTH > 0)
     {
-        Profiler::MemAllocCallstackOffset( p, size, CALLBACK_DEPTH, true, 4 );
+        Profiler::MemAllocCallstack( p, size, CALLBACK_DEPTH, true);
     }
     else
     {
@@ -2534,14 +2534,17 @@ void Profiler::ClearSerial()
             break;
         }
     }
-    for( auto& v : m_serialQueue ) FreeAssociatedMemory( v );
+    m_serialQueue.iter_clear([](const QueueItem& v){
+        FreeAssociatedMemory( v );
+    });
     m_serialQueue.clear();
     if( lockHeld )
     {
         m_serialLock.unlock();
     }
-
-    for( auto& v : m_serialDequeue ) FreeAssociatedMemory( v );
+    m_serialDequeue.iter_clear([](const QueueItem& v){
+        FreeAssociatedMemory( v );
+    });
     m_serialDequeue.clear();
 }
 
@@ -2902,22 +2905,7 @@ Profiler::DequeueStatus Profiler::DequeueContextSwitches( tracy::moodycamel::Con
 
 Profiler::DequeueStatus Profiler::DequeueSerial()
 {
-    {
-        bool lockHeld = true;
-        while( !m_serialLock.try_lock() )
-        {
-            if( m_shutdownManual.load( std::memory_order_relaxed ) )
-            {
-                lockHeld = false;
-                break;
-            }
-        }
-        if( !m_serialQueue.empty() ) m_serialQueue.swap( m_serialDequeue );
-        if( lockHeld )
-        {
-            m_serialLock.unlock();
-        }
-    }
+    if( !m_serialQueue.empty() ) m_serialQueue.swap( m_serialDequeue );
 
     const auto sz = m_serialDequeue.size();
     if( sz > 0 )
