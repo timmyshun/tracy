@@ -1,6 +1,8 @@
 #ifndef __TRACY_HPP__
 #define __TRACY_HPP__
 
+THIRD_PARTY_INCLUDES_START
+
 #include "../common/TracyColor.hpp"
 #include "../common/TracySystem.hpp"
 
@@ -127,10 +129,10 @@
 #  define ZoneTransientN( varname, name, active ) tracy::ScopedZone varname( __LINE__, __FILE__, strlen( __FILE__ ), __FUNCTION__, strlen( __FUNCTION__ ), name, strlen( name ), active )
 #endif
 
-#define ZoneScoped ZoneNamed( ___tracy_scoped_zone, true )
-#define ZoneScopedN( name ) ZoneNamedN( ___tracy_scoped_zone, name, true )
-#define ZoneScopedC( color ) ZoneNamedC( ___tracy_scoped_zone, color, true )
-#define ZoneScopedNC( name, color ) ZoneNamedNC( ___tracy_scoped_zone, name, color, true )
+#define ZoneScoped ZoneNamed( TracyConcat(___tracy_scoped_zone,__LINE__), true )
+#define ZoneScopedN( name ) ZoneNamedN( TracyConcat(___tracy_scoped_zone,__LINE__), name, true )
+#define ZoneScopedC( color ) ZoneNamedC( TracyConcat(___tracy_scoped_zone,__LINE__), color, true )
+#define ZoneScopedNC( name, color ) ZoneNamedNC( TracyConcat(___tracy_scoped_zone,__LINE__), name, color, true )
 
 #define ZoneText( txt, size ) ___tracy_scoped_zone.Text( txt, size )
 #define ZoneTextV( varname, txt, size ) varname.Text( txt, size )
@@ -265,5 +267,7 @@
 #endif
 
 #endif
+
+THIRD_PARTY_INCLUDES_END
 
 #endif
