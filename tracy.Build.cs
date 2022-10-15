@@ -9,8 +9,9 @@ public class tracy : ModuleRules
 	{
 		Type = ModuleType.External;
 
-		string TracyPath = Target.UEThirdPartySourceDirectory + "tracy/";
+		string TracyPath = Target.UEThirdPartySourceDirectory + "tracy";
 
-		PublicSystemIncludePaths.Add(TracyPath);
+		PublicSystemIncludePaths.Add(TracyPath + "/public");
+		PublicSystemIncludePaths.Add(TracyPath + "/public/tracy");
 	}
 }

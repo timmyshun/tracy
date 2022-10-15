@@ -129,10 +129,10 @@ THIRD_PARTY_INCLUDES_START
 #  define ZoneTransientN( varname, name, active ) tracy::ScopedZone varname( __LINE__, __FILE__, strlen( __FILE__ ), __FUNCTION__, strlen( __FUNCTION__ ), name, strlen( name ), active )
 #endif
 
-#define ZoneScoped ZoneNamed( TracyConcat(___tracy_scoped_zone,__LINE__), true )
-#define ZoneScopedN( name ) ZoneNamedN( TracyConcat(___tracy_scoped_zone,__LINE__), name, true )
-#define ZoneScopedC( color ) ZoneNamedC( TracyConcat(___tracy_scoped_zone,__LINE__), color, true )
-#define ZoneScopedNC( name, color ) ZoneNamedNC( TracyConcat(___tracy_scoped_zone,__LINE__), name, color, true )
+#define ZoneScoped ZoneNamed( TracyConcat(___tracy_scoped_zone,__LINE__), true );TracyConcat(___tracy_scoped_zone,__LINE__);
+#define ZoneScopedN( name ) ZoneNamedN( TracyConcat(___tracy_scoped_zone,__LINE__), name, true );TracyConcat(___tracy_scoped_zone,__LINE__);
+#define ZoneScopedC( color ) ZoneNamedC( TracyConcat(___tracy_scoped_zone,__LINE__), color, true );TracyConcat(___tracy_scoped_zone,__LINE__);
+#define ZoneScopedNC( name, color ) ZoneNamedNC( TracyConcat(___tracy_scoped_zone,__LINE__), name, color, true );TracyConcat(___tracy_scoped_zone,__LINE__);
 
 #define ZoneText( txt, size ) ___tracy_scoped_zone.Text( txt, size )
 #define ZoneTextV( varname, txt, size ) varname.Text( txt, size )
